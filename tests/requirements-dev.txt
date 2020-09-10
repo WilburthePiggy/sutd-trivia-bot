@@ -1,0 +1,2 @@
+mypy-boto3-stepfunctions
+boto3-stubs[stepfunctions]

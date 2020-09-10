@@ -1,0 +1,32 @@
+{
+    "Comment": "Ask Question Workflow",
+    "StartAt": "send_question",
+    "States": {
+        "send_question":{
+            "Type": "Task",
+            "Resource": "${SendQuestionFunctionArn}",
+            "Parameters": {
+                "chat_id.$": "$.chat_id",
+                "question.$": "$.question",
+                "execution_arn.$": "$$.Execution.Id"
+            },
+            "Next": "wait_for_timeout",
+            "ResultPath": "$.send_question"
+        },
+        "wait_for_timeout":{
+            "Type": "Wait",
+            "Seconds": 15,
+            "Next": "fail_question"
+        },
+        "fail_question": {
+            "Type": "Task",
+            "Resource": "${FailQuestionFunctionArn}",
+            "Parameters": {
+                "chat_id.$": "$.chat_id",
+                "message_id.$": "$.send_question.message_id",
+                "question.$": "$.question"
+            },
+            "End": true
+        }
+    }
+}

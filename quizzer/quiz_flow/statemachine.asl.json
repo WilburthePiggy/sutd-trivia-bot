@@ -1,0 +1,83 @@
+{
+    "Comment": "Trivia Quiz Workflow",
+    "StartAt": "sample_questions",
+    "States": {
+        "sample_questions": {
+            "Type": "Task",
+            "Resource": "${SampleQuestionsFunctionArn}",
+            "Next": "choose_question",
+            "Parameters": {
+                "questions_to_ask": 10
+            },
+            "ResultPath": "$.question_bank"
+        },
+        "choose_question": {
+            "Type": "Task",
+            "Resource": "${ChooseQuestionFunctionArn}",
+            "Next": "ask_question",
+            "ResultPath": "$.question_bank",
+            "Parameters": {
+                "chat_id.$": "$.chat_id",
+                "sample_question_ids.$": "$.question_bank.sample_question_ids",
+                "already_asked.$": "$.question_bank.already_asked"
+            }
+        },
+        "ask_question": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::states:startExecution.sync",
+            "Parameters": {
+                "StateMachineArn": "${QuestionFlowStateMachineArn}",
+                "Input": {
+                    "chat_id.$": "$.chat_id",
+                    "question.$": "$.question_bank.next_question"
+                }
+            },
+            "Next": "questions_remaining?",
+            "ResultPath": null,
+            "Catch": [
+                {
+                    "ErrorEquals": ["States.TaskFailed"],
+                    "Next": "questions_remaining?",
+                    "ResultPath": null
+                }
+            ]
+        },
+        "questions_remaining?": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.question_bank.number_of_questions_remaining",
+                    "NumericGreaterThan": 0,
+                    "Next": "wait_after_question"
+                }
+            ],
+            "Default": "end_quiz"
+        },
+        "wait_after_question": {
+            "Type": "Wait",
+            "Seconds": 2,
+            "Next": "intermission"
+        },
+        "intermission": {
+            "Type": "Task",
+            "Resource": "${IntermissionFunctionArn}",
+            "Next": "choose_question",
+            "Parameters": {
+                "chat_id.$": "$.chat_id",
+                "sample_question_ids.$": "$.question_bank.sample_question_ids",
+                "already_asked.$": "$.question_bank.already_asked",
+                "question_just_asked.$": "$.question_bank.next_question",
+                "number_of_questions_remaining.$": "$.question_bank.number_of_questions_remaining"
+            },
+            "ResultPath": null
+        },
+        "end_quiz": {
+            "Type": "Task",
+            "Resource": "${EndQuizFunctionArn}",
+            "Parameters": {
+                "chat_id.$": "$.chat_id"
+            },
+            "End": true
+        }
+    }
+}

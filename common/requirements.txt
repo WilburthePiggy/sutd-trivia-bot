@@ -1,0 +1,6 @@
+boto3
+pinject
+pydantic
+requests
+python-telegram-bot
+python-dynamodb-lock-whatnick

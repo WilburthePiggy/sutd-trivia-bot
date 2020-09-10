@@ -1,0 +1,270 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sutd-trivia-bot
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Parameters:
+  BotToken:
+    Type: String
+    Description: Telegram API bot token
+
+Globals:
+  Function:
+    Timeout: 15
+    Runtime: python3.8
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref GameTable
+        LOCK_TABLE_NAME: !Ref LockTable
+        BOT_TOKEN: !Ref BotToken
+    Layers:
+      - !Ref CommonLayer
+    EventInvokeConfig:
+      MaximumRetryAttempts: 0
+
+Resources:
+  CommonLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: common
+      CompatibleRuntimes:
+        - python3.8
+    Metadata:
+      BuildMethod: python3.8
+  LockTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      KeySchema:
+        - AttributeName: "lock_key"
+          KeyType: "HASH"
+        - AttributeName: "sort_key"
+          KeyType: "RANGE"
+      AttributeDefinitions:
+        - AttributeName: "lock_key"
+          AttributeType: "S"
+        - AttributeName: "sort_key"
+          AttributeType: "S"
+      BillingMode: PAY_PER_REQUEST
+      TimeToLiveSpecification:
+        AttributeName: expiry_time
+        Enabled: true
+  GameTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      KeySchema:
+        - AttributeName: "pk"
+          KeyType: "HASH"
+        - AttributeName: "sk"
+          KeyType: "RANGE"
+      AttributeDefinitions:
+        - AttributeName: "pk"
+          AttributeType: "S"
+        - AttributeName: "sk"
+          AttributeType: "S"
+        - AttributeName: "score"
+          AttributeType: "N"
+        - AttributeName: "gsi_current_active_question"
+          AttributeType: "S"
+        - AttributeName: "gsi_callback_question_id"
+          AttributeType: "S"
+      GlobalSecondaryIndexes:
+        - IndexName: ScoreBoard
+          KeySchema:
+            - AttributeName: "pk"
+              KeyType: "HASH"
+            - AttributeName: "score"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: ALL
+        - IndexName: CurrentActiveQuestion
+          KeySchema:
+            - AttributeName: "pk"
+              KeyType: "HASH"
+            - AttributeName: "gsi_current_active_question"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: ALL
+        - IndexName: CallbacksByQuestionId
+          KeySchema:
+            - AttributeName: "pk"
+              KeyType: "HASH"
+            - AttributeName: "gsi_callback_question_id"
+              KeyType: "RANGE"
+          Projection:
+            ProjectionType: ALL
+      BillingMode: PAY_PER_REQUEST
+  TelegramBotFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: bot
+      Handler: lambda_entry.lambda_handler
+      Events:
+        JoinSession:
+          Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Path: /
+            Method: post
+            RestApiId: !Ref TelegramWebhookAPI
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref GameTable
+          LOCK_TABLE_NAME: !Ref LockTable
+          START_GAME_STATE_MACHINE_ARN: !Ref QuizFlowStateMachine
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - 'states:StopExecution'
+                - 'states:StartExecution'
+              Resource:
+                - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*"
+                - !Sub
+                  - "arn:${Partition}:states:${Region}:${Account}:execution:${StateMachineName}:*"
+                  - Partition: !Ref AWS::Partition
+                    Region: !Ref AWS::Region
+                    Account: !Ref AWS::AccountId
+                    StateMachineName: !GetAtt QuizFlowStateMachine.Name
+                - !Sub
+                  - "arn:${Partition}:states:${Region}:${Account}:execution:${StateMachineName}:*"
+                  - Partition: !Ref AWS::Partition
+                    Region: !Ref AWS::Region
+                    Account: !Ref AWS::AccountId
+                    StateMachineName: !GetAtt QuestionFlowStateMachine.Name
+  TelegramWebhookAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-TelegramWebhookAPI"
+      StageName: prod
+      EndpointConfiguration:
+        Type: REGIONAL
+
+  ### Question Flow Section
+  QuestionFlowSendQuestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: quizzer/question_flow/send_question
+      Handler: send.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+  QuestionFlowFailQuestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: quizzer/question_flow/fail_question
+      Handler: fail.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+  QuestionFlowStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: quizzer/question_flow/statemachine.asl.json
+      DefinitionSubstitutions:
+        SendQuestionFunctionArn: !GetAtt QuestionFlowSendQuestionFunction.Arn
+        FailQuestionFunctionArn: !GetAtt QuestionFlowFailQuestionFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QuestionFlowSendQuestionFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QuestionFlowFailQuestionFunction
+
+  ### Parent Quiz Flow Section
+  QuizFlowSampleQuestionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: quizzer/quiz_flow/sample_questions
+      Handler: sample.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+  QuizFlowChooseQuestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: quizzer/quiz_flow/choose_question
+      Handler: choose.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+  QuizFlowEndQuizFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: quizzer/quiz_flow/end_quiz
+      Handler: end.lambda_handler
+      Environment:
+        Variables:
+          START_GAME_STATE_MACHINE_ARN: "To replace later"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+  QuizFlowIntermissionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: quizzer/quiz_flow/intermission
+      Handler: intermission.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LockTable
+  QuizFlowStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: quizzer/quiz_flow/statemachine.asl.json
+      DefinitionSubstitutions:
+        SampleQuestionsFunctionArn: !GetAtt QuizFlowSampleQuestionsFunction.Arn
+        ChooseQuestionFunctionArn: !GetAtt QuizFlowChooseQuestionFunction.Arn
+        EndQuizFunctionArn: !GetAtt QuizFlowEndQuizFunction.Arn
+        IntermissionFunctionArn: !GetAtt QuizFlowIntermissionFunction.Arn
+        QuestionFlowStateMachineArn: !Ref QuestionFlowStateMachine
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QuizFlowSampleQuestionsFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QuizFlowChooseQuestionFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QuizFlowIntermissionFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref QuizFlowEndQuizFunction
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !Sub
+              - "${QuestionFlowStateMachineName}"
+              - QuestionFlowStateMachineName: !GetAtt QuestionFlowStateMachine.Name
+        - Statement:
+          - Effect: Allow
+            Action:
+              - states:DescribeExecution
+              - states:StopExecution
+            Resource:
+              - "*"
+          - Effect: Allow
+            Action:
+              - events:PutTargets
+              - events:PutRule
+              - events:DescribeRule
+            Resource:
+            - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule
+Outputs:
+  TelegramWebhookURL:
+    Description: Set the bot's API webhook to this location
+    Value: !Sub "https://${TelegramWebhookAPI}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  GameTableName:
+    Value: !Ref GameTable
+  LockTableName:
+    Value: !Ref LockTable
