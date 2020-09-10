@@ -3,7 +3,7 @@
 # answer: (str) The correct answer. Case Insensitive.
 
 questions = [
-    {"question": "Grumpy is an SUTD animal. What is he?", "answer": "Cat"},
+    {"question": "Grumpy is an SUTD animal. What is she?", "answer": "Cat"},
     {
         "question": "Where was SUTD's temporary campus before the Upper Changi Campus opened?",
         "answer": "Dover",
