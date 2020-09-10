@@ -261,7 +261,7 @@ class QuestionResponder:
                     reply_to_message_id=answer_message_id,
                 )
         else:
-            _, wrong_users, rejected_before = result
+            _, wrong_users, rejected_before, beaten_to = result
             if answer_callback_query_id is not None:
                 question_message = self.question_message_repository.find(
                     self.chat_id, self.message_id
@@ -282,20 +282,27 @@ class QuestionResponder:
                             )
                         ]
                     )
-                if not rejected_before:
-                    self.bot.edit_message_text(
-                        text=message_text,
-                        parse_mode="HTML",
-                        message_id=self.message_id,
-                        chat_id=self.chat_id,
-                        reply_markup=InlineKeyboardMarkup(keyboard),
-                    )
-                    self.bot.answer_callback_query(
-                        text="❌ Wrong :(", callback_query_id=answer_callback_query_id
-                    )
+                if not beaten_to:
+                    if not rejected_before:
+                        self.bot.edit_message_text(
+                            text=message_text,
+                            parse_mode="HTML",
+                            message_id=self.message_id,
+                            chat_id=self.chat_id,
+                            reply_markup=InlineKeyboardMarkup(keyboard),
+                        )
+                        self.bot.answer_callback_query(
+                            text="❌ Wrong :(",
+                            callback_query_id=answer_callback_query_id,
+                        )
+                    else:
+                        self.bot.answer_callback_query(
+                            text="You already chose the wrong answer!",
+                            callback_query_id=answer_callback_query_id,
+                        )
                 else:
                     self.bot.answer_callback_query(
-                        text="You already chose the wrong answer!",
+                        text="Oops! Someone beat you to it!",
                         callback_query_id=answer_callback_query_id,
                     )
 

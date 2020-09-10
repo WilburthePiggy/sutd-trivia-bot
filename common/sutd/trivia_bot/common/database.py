@@ -83,7 +83,7 @@ class QuestionMessageRepository:
         answer_time: int,
         user_display_name: str,
         no_retries: bool,
-    ) -> Union[Tuple[bool, int, str], Tuple[bool, Set[str], bool]]:
+    ) -> Union[Tuple[bool, int, str], Tuple[bool, Set[str], bool, bool]]:
         try:
             no_retry_condition_clause = (
                 "AND (attribute_not_exists(wrong_users) OR NOT contains(wrong_users, :user_display_name))"
@@ -112,7 +112,7 @@ class QuestionMessageRepository:
             )
         except ClientError as ex:
             if ex.response["Error"]["Code"] == "ConditionalCheckFailedException":
-                # wrong answer
+                # wrong answer OR they got beaten
                 response = self.table.update_item(
                     Key={"pk": f"CHAT#{chat_id}", "sk": f"MESSAGE#{message_id}",},
                     UpdateExpression="ADD wrong_users :w",
@@ -120,7 +120,15 @@ class QuestionMessageRepository:
                     ReturnValues="ALL_OLD",
                 )
                 if "Attributes" not in response:
-                    logging.warn("For some reason, attributes are epty")
+                    logging.warn("For some reason, attributes are empty")
+                    response2 = self.table.get_item(
+                        Key={"pk": f"CHAT#{chat_id}", "sk": f"MESSAGE#{message_id}",},
+                        ConsistentRead=True,
+                    )
+                    response["Attributes"] = response2["Item"]
+                    if response2["Item"] is None:
+                        return False, set(), False, False
+                question_message = QuestionMessage(**response["Attributes"])
                 return (
                     False,
                     {user_display_name}.union(
@@ -128,6 +136,7 @@ class QuestionMessageRepository:
                     ),
                     user_display_name
                     in response.get("Attributes", dict()).get("wrong_users", {}),
+                    question_message.solved_at is not None,
                 )
             else:
                 raise ex
@@ -230,7 +239,7 @@ class ScoreRepository:
             IndexName="ScoreBoard",
             KeyConditionExpression=Key("pk").eq(f"CHAT#{chat_id}"),
             Limit=count,
-            ScanIndexForward=True,
+            ScanIndexForward=False,
         )
         if response.get("Items") is None:
             return []
@@ -241,7 +250,7 @@ class ScoreRepository:
             IndexName="ScoreBoard",
             KeyConditionExpression=Key("pk").eq("GLOBAL_SCORE"),
             Limit=count,
-            ScanIndexForward=True,
+            ScanIndexForward=False,
         )
         if response.get("Items") is None:
             return []
