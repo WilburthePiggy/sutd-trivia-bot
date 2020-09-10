@@ -3,7 +3,7 @@
 # answer: (str) The correct answer. Case Insensitive.
 
 questions = [
-    {"question": "Grumpy is an SUTD animal. What is she?", "answer": "Cat"},
+    {"question": "Grumpy is an SUTD animal. What is he?", "answer": "Cat"},
     {
         "question": "Where was SUTD's temporary campus before the Upper Changi Campus opened?",
         "answer": "Dover",
@@ -36,5 +36,9 @@ questions = [
     {
         "question": """In outreach workshops, the Office of Marketing often sells the "hacker culture" in SUTD by showing a historical photograph of students placing a certain object on the root. What was it?""",
         "answer": "Police Car",
+    },
+    { 
+        "question": "What is the official font of SUTD?",
+        "answer": "Gotham",
     },
 ]
